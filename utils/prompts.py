@@ -9,7 +9,7 @@ Organized by depth levels and dialogue types.
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 # ======================================
-# MAIN PROMPT: SOCRATIC METHOD FOR PLATO
+# MAIN SYSTEM PROMPT: SOCRATIC METHOD FOR PLATO
 # ======================================
 
 SOCRATIC_SYSTEM_PROMPT = """You are Socrates, the Athenian philosopher, reincarnated as an AI assistant specialized in Plato's thought.
@@ -48,12 +48,12 @@ Don't give direct answers. Instead:
 
 ## INTERACTION EXAMPLE:
 User: "¿Qué es la justicia según Platón?"
-You: "Antes de explorar lo que Platón enseña sobre la justicia, dime: ¿crees que la justicia es lo mismo para el individuo que para la pólis? Y si son diferentes, ¿cómo puede una Forma única de Justicia manifestarse de maneras distintas? Considera esto: en el libro IV de La República, Platón vincula la justicia con la armonía de las partes del alma..."
+You: "Antes de explorar lo que Platón enseña sobre la justicia, dime: ¿crees que la justicia es lo mismo para el individuo que para la polis? Y si son diferentes, ¿cómo puede una Forma única de Justicia manifestarse de maneras distintas? Considera esto: en el libro IV de La República, Platón vincula la justicia con la armonía de las partes del alma..."
 """
 
-# ============================================================================
-# SPECIALIZED PROMPTS BY QUERY TYPE
-# ============================================================================
+# ======================================
+# SPECIALIZED PROMPTS BY QUESTION TYPE
+# ======================================
 
 DEFINITION_PROMPT = """When asked for a DEFINITION (what is X):
 
@@ -97,9 +97,9 @@ Context: {context}
 Ontological question: {input}
 """
 
-# ============================================================================
-# PROMPT WITH HISTORY (for extended conversations)
-# ============================================================================
+# ======================================
+# PROMPTS WITH OR WITHOUT HISTORY
+# ======================================
 
 SOCRATIC_WITH_HISTORY = ChatPromptTemplate.from_messages([
     ("system", SOCRATIC_SYSTEM_PROMPT),
@@ -107,65 +107,56 @@ SOCRATIC_WITH_HISTORY = ChatPromptTemplate.from_messages([
     ("human", "{input}")
 ])
 
-# ============================================================================
-# SIMPLE PROMPT (for direct questions)
-# ============================================================================
-
 SOCRATIC_SIMPLE = ChatPromptTemplate.from_messages([
     ("system", SOCRATIC_SYSTEM_PROMPT),
     ("human", "{input}")
 ])
 
-# ============================================================================
+# ======================================
 # PROMPT SELECTION FUNCTIONS
-# ============================================================================
+# ======================================
 
 def select_prompt_by_question_type(question: str) -> ChatPromptTemplate:
     """
     Selects the appropriate prompt based on question type.
-    
+
     Args:
         question: User's question
-        
+
     Returns:
-        The most suitable ChatPromptTemplate
+        ChatPromptTemplate suitable for the query
     """
     question_lower = question.lower()
-    
-    # Detect question type
+
     if any(word in question_lower for word in ["qué es", "define", "definición", "concepto de"]):
         return ChatPromptTemplate.from_messages([
             ("system", DEFINITION_PROMPT),
             ("human", "{input}")
         ])
-    
+
     elif any(word in question_lower for word in ["debo", "debería", "correcto", "bueno", "malo", "justo"]):
         return ChatPromptTemplate.from_messages([
             ("system", ETHICAL_DILEMMA_PROMPT),
             ("human", "{input}")
         ])
-    
+
     elif any(word in question_lower for word in ["existe", "realidad", "ser", "esencia", "forma", "idea"]):
         return ChatPromptTemplate.from_messages([
             ("system", METAPHYSICS_PROMPT),
             ("human", "{input}")
         ])
-    
+
     else:
         return SOCRATIC_SIMPLE
-
 
 def get_socratic_prompt(use_history: bool = False) -> ChatPromptTemplate:
     """
     Returns the base Socratic prompt, with or without conversation history.
-    
+
     Args:
         use_history: If True, includes placeholder for chat history
-        
+
     Returns:
         Configured ChatPromptTemplate
     """
-    if use_history:
-        return SOCRATIC_WITH_HISTORY
-    else:
-        return SOCRATIC_SIMPLE
+    return SOCRATIC_WITH_HISTORY if use_history else SOCRATIC_SIMPLE

@@ -1,160 +1,155 @@
 """
 LLM Handler Module
-------------------
-
-Handles LLM model initialization and RAG chain creation.
-
+---------------------------------------------
+Pipeline-style RAG / Conversational chain
+Spanish LLM local (Mistral/LLamaCpp) activo
+Groq y Gemini comentados
 """
 
-
-from utils.config import GOOGLE_API_KEY, GROQ_API_KEY
+import os
+import torch
 from utils.prompts import get_socratic_prompt, select_prompt_by_question_type
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
-from langchain.chains import RetrievalQA, create_retrieval_chain
+#### LangChain
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
 from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain_core.documents import Document
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
+#### Providers
+#from langchain_google_genai import ChatGoogleGenerativeAI
+#from langchain_groq import ChatGroq
 from langchain_community.llms import LlamaCpp
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
+# ================================
+# LLM initialization
+# ================================
 def get_llm_instance(model_provider: str, model: str):
     """
-    Initializes and returns an LLM instance based on provider.
-    
-    Args:
-        model_provider: Model provider ("Groq", "Gemini", "Spanish llm")
-        model: Specific model name
-        
-    Returns:
-        Configured LLM instance
-        
-    Raises:
-        ValueError: If provider is not supported
+    #### Initialize LLM instance based on provider
+    Only local Spanish LLM enabled
     """
-    if model_provider == "Groq":
-        return ChatGroq(
-            model=model, 
-            api_key=GROQ_API_KEY,
-            temperature=0.7,  # creativity
-            max_tokens=500    # Concise responses
-        ) # pop_k=
-    
-    elif model_provider == "Gemini":
-        return ChatGoogleGenerativeAI(
-            model=model, 
-            api_key=GOOGLE_API_KEY,
-            temperature=0.7,
-            convert_system_message_to_human=True
-        )
-    
-    elif model_provider == "Spanish llm":
-        model_path = "./models/eva-mistral-7b-spanish.Q4_K_M.gguf"
-        
-        return LlamaCpp(
-            model_path=model_path,
-            n_ctx=2048,
-            temperature=0.7,
-            top_p=0.95,
-            verbose=False,
-            n_gpu_layers=33,
-            max_tokens=500,
-            stop=["Usuario:", "Human:"]
-        )
-    
-    else:
-        raise ValueError(f"Unsupported provider: {model_provider}")
 
+    try:
+        #### Spanish LLM local / Hugging Face
+        if model_provider == "Spanish LLM":
+            # Local GGUF Mistral / LlamaCpp
+            model_path = "./models/eva-mistral-7b-spanish.Q4_K_M.gguf"
+            return LlamaCpp(
+                model_path=model_path,
+                n_ctx=2048,
+                temperature=0.7,
+                top_p=0.95,
+                verbose=False,
+                n_gpu_layers=33,  #### Ajustar según GPU
+                max_tokens=500,
+                stop=["Usuario:", "Human:"]
+            )
 
-def get_llm_chain(model_provider: str, model: str, vectorstore, use_smart_prompts: bool = True):
+        #### Groq
+        # elif model_provider == "Groq":
+        #     return ChatGroq(model=model, api_key="YOUR_KEY", temperature=0.7, max_tokens=500)
+
+        #### Google Gemini
+        # elif model_provider == "Gemini":
+        #     return ChatGoogleGenerativeAI(model=model, api_key="YOUR_KEY", temperature=0.7, convert_system_message_to_human=True)
+
+        else:
+            raise ValueError(f"Unsupported provider: {model_provider}")
+
+    except Exception as e:
+        print(f"❌ Error initializing LLM ({model_provider} - {model}): {e}")
+        return None
+
+# ================================
+# Retrieval-Augmented Generation Chain
+# ================================
+def get_llm_chain(model_provider: str, model: str, vectorstore, user_question: str = None, use_smart_prompts: bool = True):
     """
-    Builds a RAG (Retrieval-Augmented Generation) chain with Socratic method.
-    
-    Args:
-        model_provider: LLM provider ("groq", "gemini", "spanish-llm")
-        model: Specific model to use
-        vectorstore: ChromaDB vectorstore for context retrieval
-        use_smart_prompts: If True, select prompt based on question type
-        
-    Returns:
-        LangChain chain ready for invoke() with {"input": "question"}
-        
-    Example:
-        >>> chain = get_llm_chain("groq", "llama-3.1-8b-instant", vectorstore)
-        >>> response = chain.invoke({"input": "¿Qué es la justicia?"})
-        >>> print(response["answer"])
+    #### Builds a RAG chain (LLM + vectorstore)
     """
+
     if not model:
         return None
-    
-    # Initialize LLM
-    try:
-        llm = get_llm_instance(model_provider, model)
-    except Exception as e:
-        print(f"Error initializing LLM: {e}")
-        return None
-    
-    # Select Socratic prompt
-    if use_smart_prompts:
-        # This function will analyze the question and choose appropriate prompt
-        prompt = get_socratic_prompt(use_history=False)
-    else:
-        # Use basic Socratic prompt
-        prompt = get_socratic_prompt(use_history=False)
-    
-    # Configure retriever with optimized parameters
-    retriever = vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={
-            "k": 3,  # Top 3 most relevant chunks
-            "fetch_k": 10  # Consider 10, return 3 (more precision)
-        }
-    )
-    
-    # Create modern RAG chain
-    # Flow: question → retriever → context + question → LLM → response
-    chain = create_retrieval_chain(
-        retriever,
-        create_stuff_documents_chain(llm, prompt)
-    )
-    
-    return chain
 
-
-def get_conversational_chain(model_provider: str, model: str, vectorstore, memory):
-    """
-    Creates a conversational chain that maintains history (EXPERIMENTAL).
-    
-    Args:
-        model_provider: LLM provider
-        model: Specific model
-        vectorstore: ChromaDB vectorstore
-        memory: LangChain ConversationBufferMemory object
-        
-    Returns:
-        Chain with conversational memory
-        
-    Note:
-        To fully implement this you need:
-        from langchain.memory import ConversationBufferMemory
-        and adjust prompt to include MessagesPlaceholder
-    """
+    #### Initialize LLM
     llm = get_llm_instance(model_provider, model)
-    prompt = get_socratic_prompt(use_history=True)
-    
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    
-    # TODO: Implement with ConversationalRetrievalChain
-    # chain = ConversationalRetrievalChain.from_llm(
-    #     llm=llm,
-    #     retriever=retriever,
-    #     memory=memory,
-    #     combine_docs_chain_kwargs={"prompt": prompt}
-    # )
-    
-    return create_retrieval_chain(
-        retriever,
-        create_stuff_documents_chain(llm, prompt)
-    )
+    if llm is None:
+        return None
+
+    #### Select Socratic prompt
+    if use_smart_prompts and user_question:
+        try:
+            prompt = select_prompt_by_question_type(user_question)
+        except:
+            prompt = get_socratic_prompt(use_history=False)
+    else:
+        prompt = get_socratic_prompt(use_history=False)
+
+    #### Configure retriever
+    try:
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 3, "fetch_k": 10}
+        )
+    except Exception as e:
+        print(f"❌ Error configuring retriever: {e}")
+        return None
+
+    #### Create RAG chain
+    try:
+        chain = create_retrieval_chain(
+            retriever,
+            create_stuff_documents_chain(llm, prompt)
+        )
+        return chain
+    except Exception as e:
+        print(f"❌ Error creating retrieval chain: {e}")
+        return None
+
+# ================================
+# Conversational Chain with memory
+# ================================
+def get_conversational_chain(model_provider: str, model: str, vectorstore, memory: ConversationBufferMemory, user_question: str = None, use_smart_prompts: bool = True):
+    """
+    #### Creates a conversational RAG chain that keeps history
+    """
+
+    #### Initialize LLM
+    llm = get_llm_instance(model_provider, model)
+    if llm is None:
+        return None
+
+    #### Select Socratic prompt
+    if use_smart_prompts and user_question:
+        try:
+            prompt = select_prompt_by_question_type(user_question)
+        except:
+            prompt = get_socratic_prompt(use_history=True)
+    else:
+        prompt = get_socratic_prompt(use_history=True)
+
+    #### Configure retriever
+    try:
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 3, "fetch_k": 10}
+        )
+    except Exception as e:
+        print(f"❌ Error configuring retriever: {e}")
+        return None
+
+    #### Create conversational retrieval chain
+    try:
+        chain = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=retriever,
+            memory=memory,
+            combine_docs_chain_kwargs={"prompt": prompt}
+        )
+        return chain
+    except Exception as e:
+        print(f"❌ Error creating conversational chain: {e}")
+        return None
